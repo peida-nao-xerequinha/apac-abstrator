@@ -112,35 +112,49 @@ def lookup_medico_cns(nome_medico: str, df_medicos: pd.DataFrame) -> dict:
         return {'apa_cnsres': formatar_num(0, 15), 'nome_completo': nome_medico}
 
 
+# Correção no lookup_cnes_data (no seu main.py)
+
 def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> dict:
-    """
-    Busca o código CNES e retorna um dicionário com todos os dados de referência 
-    necessários (CNES, UF, CGC/CPF, etc.).
-    """
+    
     nome_unidade_limpo = nome_unidade.strip().upper()
+    cnes_data = CNES_REF_DEFAULTS.copy() 
+
+# PRINT 1: Verificar o nome que está sendo usado para a busca (input)
+    print(f"\n--- INÍCIO LOOKUP CNES ---")
+    print(f"1. Nome da Unidade Buscada (Upper): '{nome_unidade_limpo}'")
+    # -----------------------------------------------------------------
+   
     unidade_encontrada = df_estabelecimentos[
         df_estabelecimentos['desc_solicitante'].str.strip().str.upper().str.contains(nome_unidade_limpo, na=False)
     ]
     
-    cnes_data = CNES_REF_DEFAULTS.copy()
+    # -----------------------------------------------------------------
+    # PRINT 2: Verificar o resultado da busca (DataFrame)
+    print(f"2. Unidades Encontradas (Total): {len(unidade_encontrada)}")
+    # -----------------------------------------------------------------
     
     if not unidade_encontrada.empty:
         cnes_cod = str(unidade_encontrada['cod_solicitante'].iloc[0])
-        cnes_data['apa_codcnes'] = formatar_num(cnes_cod, 7)
+        # CORREÇÃO: Armazena o CNES buscado na chave cnes_solicitante
+        cnes_data['cnes_solicitante'] = formatar_num(cnes_cod, 7)
     else:
-        cnes_data['apa_codcnes'] = formatar_num("5778204", 7)
+        # Fallback se não encontrar (usando um CNES padrão para o solicitante)
+        cnes_data['cnes_solicitante'] = formatar_num("5556667", 7)
+
+# -----------------------------------------------------------------
+    # PRINT 3: Verificar o valor final atribuído
+    print(f"3. CNES Solicitante Atribuído: {cnes_data['cnes_solicitante']}")
+    print(f"--- FIM LOOKUP CNES ---\n")
+    # -----------------------------------------------------------------
         
     return cnes_data
 
 
-def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_ref):
+def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     """Gera o bloco de linhas 14, 06, e 13s para um paciente."""
     
-    # CNES Executante/Prestador (Fixo, para o teste)
-    CNES_PRESTADOR_EXECUTANTE = "5778204"
-    
-    # O CNES Solicitante é o resultado do lookup do CSV de estabelecimentos
-    CNES_SOLICITANTE_BUSCADO = cnes_ref['apa_codcnes']
+    # CNES Solicitante (BUSCADO)
+    CNES_SOLICITANTE = cnes_ref['cnes_solicitante'] # Puxa da chave corrigida no lookup
 
     # 1. Extração e Formatação de Dados Base
     data_nascimento_fmt = paciente_dict['Data_Nascimento']
@@ -148,11 +162,19 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_ref):
     competencia = data_consulta_fmt[:6]
     
     # --- CÁLCULOS E REGRAS DE NEGÓCIO ---
+
+    # 1. Tenta a chave 'Mae' (padrão)
+    nome_mae_provisorio = paciente_dict.get('Mae', '')
+
+# 2. Se a primeira falhar (vazia ou None), tenta a chave 'Mãe' (com acento)
+    if not nome_mae_provisorio:
+        nome_mae_provisorio = paciente_dict.get('Mãe', '')
+
     idade = calcular_idade(data_nascimento_fmt, data_consulta_fmt)
     if idade >= 18:
         nome_responsavel_final = paciente_dict.get('Nome', '')
     else:
-        nome_responsavel_final = paciente_dict.get('Mae', '')
+        nome_responsavel_final = nome_mae_provisorio
     
     proc_selecionado = selecionar_procedimento(idade)
     cod_principal = next(key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items() if value == proc_selecionado)
@@ -166,7 +188,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_ref):
         'apa_cmp': competencia, 
         'apa_num': apac_numero,
         'apa_coduf': cnes_ref['apa_coduf'],
-        'apa_codcnes': CNES_PRESTADOR_EXECUTANTE,
+        'apa_codcnes': '5778204',
         'apa_pr': data_consulta_fmt,
         'apa_dtiinval': data_consulta_fmt,
         'apa_dtfimval': data_consulta_fmt,
@@ -185,8 +207,8 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_ref):
         'apa_dddtelcontato': '00', 
         'apa_email': '', 
         'apa_strua': 'N',
-        'apa_codsol': CNES_SOLICITANTE_BUSCADO,
-        'apa_cidca': '',
+        'apa_codsol': CNES_SOLICITANTE,
+        'apa_cidca': cid_paciente,
         'apa_npront': '',
         'apa_cplpcnte': '',
 
@@ -228,7 +250,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_ref):
     blocos.append(montar_laudo_geral(competencia, apac_numero, dados_apac_montagem['apa_cidca'])) # Usa o CID do paciente
     
     # Registros 13: PROCEDIMENTOS (Principal + Secundários)
-    blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, cnes_ref[CNES_SOLICITANTE_BUSCADO]))
+    blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, CNES_SOLICITANTE))
             
     return blocos
 
