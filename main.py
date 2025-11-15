@@ -75,6 +75,8 @@ def ler_csv_pacientes(filepath):
     for col in df.columns:
         if 'Data/Hor' in col:
             renaming_dict[col] = 'Data_Horario'
+        elif 'MÃ£e' in col:
+            renaming_dict[col] = 'Mae'
         elif 'MÆe' in col:
             renaming_dict[col] = 'Mae'
         elif 'Ra‡a/Cor' in col:
@@ -127,8 +129,8 @@ def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> di
     cnes_data = CNES_REF_DEFAULTS.copy() 
 
 # PRINT 1: Verificar o nome que está sendo usado para a busca (input)
-    print(f"\n--- INÍCIO LOOKUP CNES ---")
-    print(f"1. Nome da Unidade Buscada (Upper): '{nome_unidade_limpo}'")
+    #print(f"\n--- INÍCIO LOOKUP CNES ---")
+    #print(f"1. Nome da Unidade Buscada (Upper): '{nome_unidade_limpo}'")
     # -----------------------------------------------------------------
    
     unidade_encontrada = df_estabelecimentos[
@@ -137,7 +139,7 @@ def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> di
     
     # -----------------------------------------------------------------
     # PRINT 2: Verificar o resultado da busca (DataFrame)
-    print(f"2. Unidades Encontradas (Total): {len(unidade_encontrada)}")
+    #print(f"2. Unidades Encontradas (Total): {len(unidade_encontrada)}")
     # -----------------------------------------------------------------
     
     if not unidade_encontrada.empty:
@@ -150,8 +152,8 @@ def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> di
 
 # -----------------------------------------------------------------
     # PRINT 3: Verificar o valor final atribuído
-    print(f"3. CNES Solicitante Atribuído: {cnes_data['cnes_solicitante']}")
-    print(f"--- FIM LOOKUP CNES ---\n")
+    #print(f"3. CNES Solicitante Atribuído: {cnes_data['cnes_solicitante']}")
+    #print(f"--- FIM LOOKUP CNES ---\n")
     # -----------------------------------------------------------------
         
     return cnes_data
@@ -173,7 +175,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     # 1. Extração e Formatação de Dados Base
     data_nascimento_fmt = paciente_dict['Data_Nascimento']
     data_consulta_fmt = paciente_dict['Data_Horario']
-    competencia = data_consulta_fmt[:6]
+    competencia = 202509
     
     # --- CÁLCULOS E REGRAS DE NEGÓCIO ---
 
@@ -192,8 +194,6 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     
     proc_selecionado = selecionar_procedimento(idade)
     cod_principal = next(key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items() if value == proc_selecionado)
-
-    cid_paciente = paciente_dict.get('CID', '').replace('.', '')
 
     raca_paciente_codigo = mapear_raca_cor(paciente_dict.get('Raca_Cor', ''))
     
@@ -224,7 +224,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
         'apa_email': '', 
         'apa_strua': 'N',
         'apa_codsol': CNES_SOLICITANTE,
-        'apa_cidca': cid_paciente,
+        #'apa_cidca': '',
         'apa_npront': '',
         'apa_cplpcnte': '',
 
@@ -243,6 +243,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
         'apa_bairro': paciente_dict.get('Bairro', ''),
         'apa_telcontato': str(paciente_dict.get('Contato 1', '0')),
         'apa_ine': '',
+        'cid_paciente': paciente_dict.get('CID', '').replace('.', ''),
 
         # DADOS PROFISSIONAIS (Mapeados dos Lookups)
         'apa_codprinc': cod_principal.replace('-', ''),
@@ -254,7 +255,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
         'apa_nomeresp': medico_ref['nome_completo'],
     }
     
-    print(f"--- Dicionário Final de Dados Antes da Formatação ---\n{dados_apac_montagem}")
+    #print(f"--- Dicionário Final de Dados Antes da Formatação ---\n{dados_apac_montagem}")
     
     # 3. Geração das Linhas
     blocos = []
@@ -263,7 +264,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     blocos.append(montar_corpo(dados_apac_montagem)) 
     
     # Registro 06: LAUDO GERAL
-    blocos.append(montar_laudo_geral(competencia, apac_numero, dados_apac_montagem['apa_cidca'])) # Usa o CID do paciente
+    blocos.append(montar_laudo_geral(competencia, apac_numero, dados_apac_montagem['cid_paciente'])) # Usa o CID do paciente
     
     # Registros 13: PROCEDIMENTOS (Principal + Secundários)
     blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, cnes_terceiro_final))
@@ -331,7 +332,7 @@ if __name__ == '__main__':
             blocos = gerar_blocos_paciente(dados_paciente, apac_numero_base, medico_ref, cnes_ref)
             linhas_finais.extend(blocos)
             apacs_processadas += 1
-            print(f"-> APAC gerada para {dados_paciente['Nome']}. Numeração: {apac_numero_base}")
+            #print(f"-> APAC gerada para {dados_paciente['Nome']}. Numeração: {apac_numero_base}")
         except Exception as e:
             print(f"ERRO FATAL NA GERAÇÃO DA APAC {apac_numero_base}: {e}")
             

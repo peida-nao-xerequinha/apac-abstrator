@@ -136,10 +136,10 @@ def montar_corpo(dados_linha):
     registro += formatar_char(dados_linha.get('apa_bairro', ''), 30)
     
     # 42. DDD do telefone (apa_dddtelcontato - Tam: 2)
-    registro += formatar_num(dados_linha.get('apa_dddtelcontato', ''), 2)
+    registro += formatar_char(dados_linha.get('apa_dddtelcontato', ''), 2)
     
     # 43. Telefone de contato (apa_telcontato - Tam: 9)
-    registro += formatar_num(dados_linha.get('apa_telcontato', ''), 9)
+    registro += formatar_char(dados_linha.get('apa_telcontato', ''), 9)
     
     # 44. E-Mail do Paciente (apa_email - Tam: 40)
     registro += formatar_char(dados_linha.get('apa_email', ''), 40)
