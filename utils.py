@@ -55,6 +55,36 @@ MAPA_PROCEDIMENTOS_OFTALMO = {
     }
 }
 
+# Mapeamento estático da Raça/Cor
+MAPA_RACA_COR = {
+    'BRANCA': '01',
+    'PRETA': '02',
+    'PARDA': '03',
+    'AMARELA': '04',
+    'INDIGENA': '05',
+    'INDÍGENA': '05' # Incluir variação acentuada, se necessário
+}
+
+def mapear_raca_cor(raca_str: str) -> str:
+    # 🚨 DEBUG: O que a função está recebendo?
+    print(f"\n[DEBUG RACA/COR] Valor de entrada (raca_str): '{raca_str}'")
+    
+    if not raca_str:
+        print("[DEBUG RACA/COR] String de entrada vazia/None. Retornando '01' (Default).")
+        return '01' 
+        
+    raca_limpa = raca_str.strip().upper()
+    
+    # 🚨 DEBUG: O que a função está procurando no mapa?
+    print(f"[DEBUG RACA/COR] Valor de busca (raca_limpa): '{raca_limpa}'")
+    
+    codigo_final = MAPA_RACA_COR.get(raca_limpa, '01')
+    
+    # 🚨 DEBUG: O que a função encontrou?
+    print(f"[DEBUG RACA/COR] Código APAC retornado: {codigo_final}")
+    
+    return codigo_final
+
 def calcular_idade(data_nasc_str, data_consulta_str):
     """Calcula a idade em anos completos."""
     try:

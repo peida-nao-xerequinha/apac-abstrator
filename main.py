@@ -2,13 +2,14 @@ import pandas as pd
 from datetime import datetime
 import os
 import sys
+import apac_manager
 
 # Adiciona o diretório atual ao path para importar os módulos auxiliares
 sys.path.append(os.path.dirname(__file__))
 
 # Importa as funções de formatação e lógica de todos os módulos
-from utils import formatar_num, formatar_char, calcular_idade, selecionar_procedimento, MAPA_PROCEDIMENTOS_OFTALMO, FIM_LINHA 
-from apac_manager import consumir_apac, salvar_numeracoes
+from utils import formatar_num, formatar_char, calcular_idade, selecionar_procedimento, MAPA_PROCEDIMENTOS_OFTALMO, FIM_LINHA, mapear_raca_cor
+from apac_manager import inicializar_manager, consumir_apac, salvar_numeracoes
 from header import montar_cabecalho
 from corpo import montar_corpo
 from variavel import montar_laudo_geral
@@ -68,6 +69,8 @@ def ler_csv_pacientes(filepath):
     if df.columns[0].startswith('Unnamed'):
         df = df.iloc[:, 1:] 
 
+    print(df.columns)
+
     renaming_dict = {}
     for col in df.columns:
         if 'Data/Hor' in col:
@@ -75,6 +78,8 @@ def ler_csv_pacientes(filepath):
         elif 'MÆe' in col:
             renaming_dict[col] = 'Mae'
         elif 'Ra‡a/Cor' in col:
+            renaming_dict[col] = 'Raca_Cor'
+        elif 'RaÃ§a/Cor' in [col]:
             renaming_dict[col] = 'Raca_Cor'
         elif 'Profissional' in col:
             renaming_dict[col] = 'Nome_Medico_Solicitante'
@@ -85,6 +90,8 @@ def ler_csv_pacientes(filepath):
 
     df.rename(columns=renaming_dict, inplace=True)
     
+    print(f"depois do tratamento: {df.columns}")
+
     df['Data_Nascimento'] = df['Data_Nascimento'].apply(_converter_data_para_apac)
     df['Data_Horario'] = df['Data_Horario'].apply(_converter_data_para_apac)
 
@@ -139,7 +146,7 @@ def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> di
         cnes_data['cnes_solicitante'] = formatar_num(cnes_cod, 7)
     else:
         # Fallback se não encontrar (usando um CNES padrão para o solicitante)
-        cnes_data['cnes_solicitante'] = formatar_num("5556667", 7)
+        cnes_data['cnes_solicitante'] = formatar_num("5778204", 7)
 
 # -----------------------------------------------------------------
     # PRINT 3: Verificar o valor final atribuído
@@ -155,6 +162,13 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     
     # CNES Solicitante (BUSCADO)
     CNES_SOLICITANTE = cnes_ref['cnes_solicitante'] # Puxa da chave corrigida no lookup
+    if CNES_SOLICITANTE == '5778204':
+    # Se o solicitante for o próprio prestador/executante, o campo fica vazio (ou zerado).
+    # Vamos usar '0' que será formatado para '0000000' (7 dígitos)
+     cnes_terceiro_final = formatar_char('', 7)
+    else:
+    # Se for uma unidade diferente, o CNES Solicitante será o CNES Terceiro.
+        cnes_terceiro_final = CNES_SOLICITANTE
 
     # 1. Extração e Formatação de Dados Base
     data_nascimento_fmt = paciente_dict['Data_Nascimento']
@@ -180,6 +194,8 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     cod_principal = next(key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items() if value == proc_selecionado)
 
     cid_paciente = paciente_dict.get('CID', '').replace('.', '')
+
+    raca_paciente_codigo = mapear_raca_cor(paciente_dict.get('Raca_Cor', ''))
     
     # 2. CRIAÇÃO DO DICIONÁRIO UNIFICADO (COM CHAVES APAC)
     dados_apac_montagem = {
@@ -222,7 +238,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
         'apa_munpcnte': cnes_ref['cod_mun_ibge'], 
         'apa_datanascim': data_nascimento_fmt, 
         'apa_sexopcnte': paciente_dict.get('Sexo', 'I')[0], 
-        'apa_raca': paciente_dict.get('Raca_Cor', '01'), 
+        'apa_raca': raca_paciente_codigo,
         'apa_cpfpcnte': str(paciente_dict.get('CPF', '0')), 
         'apa_bairro': paciente_dict.get('Bairro', ''),
         'apa_telcontato': str(paciente_dict.get('Contato 1', '0')),
@@ -250,7 +266,7 @@ def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
     blocos.append(montar_laudo_geral(competencia, apac_numero, dados_apac_montagem['apa_cidca'])) # Usa o CID do paciente
     
     # Registros 13: PROCEDIMENTOS (Principal + Secundários)
-    blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, CNES_SOLICITANTE))
+    blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, cnes_terceiro_final))
             
     return blocos
 
@@ -266,6 +282,15 @@ if __name__ == '__main__':
     
     print(f"Iniciando simulação para competência {COMPETENCIA}...")
 
+# 0. Inicializa o Gerenciador de APACs (Lê o arquivo Numeração OCI.TXT para a memória)
+    try:
+        inicializar_manager()
+        apacs_disponiveis = len(apac_manager.NUMERACOES_APAC_MEMORIA)
+        print(f"Total de numerações APAC disponíveis: {apacs_disponiveis}")
+    except Exception as e:
+        print(f"ERRO CRÍTICO na inicialização do APAC Manager: {e}")
+        sys.exit(1)
+
     # 1. Carregar Arquivos
     try:
         df_pacientes = ler_csv_pacientes(FP_PACIENTES)
@@ -278,19 +303,20 @@ if __name__ == '__main__':
         print(f"ERRO CRÍTICO na leitura de arquivos: {e}")
         sys.exit(1)
         
-    # 2. Consumir Numerações APAC
-    NUMERACOES_APAC = [f"352570410000{i:03}" for i in range(1, 11)] 
     
     linhas_finais = []
     apacs_processadas = 0
+    apac_numero_base = None # Inicializa para o cálculo do cabeçalho
     
-    # 3. LOOP DE PROCESSAMENTO
+# 3. LOOP DE PROCESSAMENTO
     for index, paciente in df_pacientes.iterrows():
-        if not NUMERACOES_APAC:
-            print("AVISO: Numerações APAC esgotadas.")
+        
+        # 3.0. Consome a APAC da memória
+        apac_numero_base, restantes = consumir_apac() 
+        
+        if not apac_numero_base:
+            print("AVISO: Numerações APAC esgotadas. Processamento interrompido.")
             break
-            
-        apac_numero_base = NUMERACOES_APAC.pop(0) 
 
         # 3.1. Enriquecimento de Dados
         dados_paciente = paciente.to_dict()
@@ -323,6 +349,9 @@ if __name__ == '__main__':
                  # Para o teste, usamos um valor fixo.
                  lista_procedimentos_para_controle.append({'cod': '090000000-0', 'qtd': '1'})
         
+    # O apac_numero_base usado aqui é o último consumido, necessário para o cálculo de controle.
+        apac_para_controle = apac_numero_base if apac_numero_base else "0"
+
         # Usamos o último apac_numero_base consumido no loop.
         header_final = montar_cabecalho(COMPETENCIA, cnes_ref, apacs_processadas, lista_procedimentos_para_controle, apac_numero_base) 
         
@@ -332,5 +361,8 @@ if __name__ == '__main__':
             f.writelines(linhas_finais)
         
         print("\nProcessamento Finalizado.")
+        salvar_numeracoes()
         print(f"Total de APACs geradas: {apacs_processadas}")
         print(f"Arquivo de remessa salvo em: {OUTPUT_FILE}")
+        apacs_disponiveis = len(apac_manager.NUMERACOES_APAC_MEMORIA)
+        print(f"Total de numerações APAC disponíveis: {apacs_disponiveis}")
