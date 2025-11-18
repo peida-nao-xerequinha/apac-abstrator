@@ -43,7 +43,7 @@ def montar_procedimento(competencia, apac_numero, cod_proc, qtd, cnes_terceiro):
 
     # 15. Código da Unidade Prestadora Terceiro (pap_cnes_terc - NUM, 7)
     # INJEÇÃO FINAL DO CNES TERCEIRO (3312445)
-    registro_replicate += formatar_num(cnes_terceiro, 7) 
+    registro_replicate += formatar_char(cnes_terceiro, 7) 
 
     registro_replicate += FIM_LINHA
     
@@ -62,7 +62,7 @@ def gerar_bloco_procedimentos(paciente_idade, competencia, apac_numero, cnes_ter
     
     # 1. Procedimento Principal
     linhas_procedimentos.append(montar_procedimento(
-        competencia, apac_numero, cod_principal, "1", cnes_terceiro
+        competencia, apac_numero, cod_principal, "1", ""
     ))
     
     # 2. Procedimentos Secundários
