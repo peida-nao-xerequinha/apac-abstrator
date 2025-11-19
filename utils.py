@@ -1,49 +1,130 @@
-from datetime import datetime, date
+from datetime import datetime
 
 # ====================================================
 # CONSTANTES E FUNÇÕES GLOBAIS DE FORMATAÇÃO
 # ====================================================
 
-# Caracteres de controle de fim de linha obrigatório pelo DATASUS (CR + LF)
+# Fim de linha obrigatório pelo DATASUS (CRLF)
 FIM_LINHA = "\r\n"
+
+
+# ============================
+# 🔐 FUNÇÕES DE SANITIZAÇÃO
+# ============================
+
+def sanitize_basic(value):
+    """
+    Converte qualquer coisa para string simples,
+    remove espaços extras e caracteres de controle comuns.
+    """
+    if value is None:
+        return ""
+    try:
+        s = str(value)
+        # remove null bytes e caracteres de controle básicos
+        s = s.replace('\x00', '')
+        # normaliza CR/LF para espaços e remove tabs
+        s = s.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+        return s.strip()
+    except Exception:
+        return ""
+
+
+def sanitize_numeric(value):
+    """
+    Remove tudo que NÃO for número.
+    Trata floats (evita notação científica) e strings com pontuação.
+    Exemplos:
+      - '519.500.107-83' -> '51950010783'
+      - 5.1950010783e10  -> '51950010783' (quando for inteiro equivalente)
+    """
+    if value is None:
+        return ""
+
+    # Protege floats para evitar notação científica estranha
+    if isinstance(value, float):
+        # se for inteiro equivalente, transforme para int
+        if value.is_integer():
+            value = str(int(value))
+        else:
+            value = str(value)
+
+    s = str(value)
+
+    # Remove separadores comuns e parênteses
+    for ch in " .,-/\\()":
+        s = s.replace(ch, "")
+
+    # Mantém apenas dígitos
+    s = ''.join(c for c in s if c.isdigit())
+
+    return s.strip()
+
+
+def sanitize_alpha(value):
+    """
+    Mantém apenas letras, espaços e alguns sinais simples.
+    Útil para campos de nome/descrição quando quiser garantir ausência de números.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    return ''.join(c for c in s if c.isalpha() or c.isspace()).strip()
+
+
+# ======================================
+# 🔧 FORMATADORES — agora com sanitização
+# ======================================
 
 def formatar_num(valor, tamanho):
     """
-    Preenche valores NUMÉRICOS com zeros à esquerda (zfill).
-    Trunca se o valor for maior que o tamanho definido.
+    Formata campo numérico:
+      - sanitiza (mantém só dígitos)
+      - remove notação científica de floats
+      - preenche com zeros à esquerda
+      - se exceder o tamanho, TRUNCA à direita (apenas último recurso de compatibilidade)
+    Obs: truncagem explícita evita exceções em massa; você pode transformar isto em erro
+    se preferir falhar rápido quando houver dados maiores que o layout.
     """
-    # 1. Converte para string e trunca para o tamanho máximo
-    valor_str = str(valor)[:tamanho]
-    # 2. Preenche com zeros à esquerda
-    return valor_str.zfill(tamanho)
+    valor_sanit = sanitize_numeric(valor)
+
+    # Se exceder o tamanho, trunca (mantendo os dígitos mais à esquerda)
+    if len(valor_sanit) > tamanho:
+        valor_sanit = valor_sanit[:tamanho]
+
+    return valor_sanit.zfill(tamanho)
+
 
 def formatar_char(valor, tamanho):
     """
-    Preenche valores ALFANUMÉRICOS com espaços à direita (ljust).
-    Trunca se o valor for maior que o tamanho definido.
+    Formata campo alfanumérico:
+      - sanitiza textos (remove CR/LF, tabs, nulls)
+      - trunca se exceder o tamanho
+      - preenche espaços à direita até o tamanho
     """
-    # 1. Converte para string e trunca para o tamanho máximo
-    valor_str = str(valor)[:tamanho]
-    # 2. Preenche com espaços à direita
-    return valor_str.ljust(tamanho)
+    valor_sanit = sanitize_basic(valor)
+
+    if len(valor_sanit) > tamanho:
+        valor_sanit = valor_sanit[:tamanho]
+
+    return valor_sanit.ljust(tamanho)
+
 
 # ====================================================
-# LÓGICA DE NEGÓCIO (MAPAS E IDADE)
+# LÓGICA DE NEGÓCIO (MAPAS E IDADE) - mantida para compatibilidade
 # ====================================================
 
 MAPA_PROCEDIMENTOS_OFTALMO = {
-    # 9 Anos ou mais (6 Procedimentos)
     "090501003-5": {
         "descricao": "OCI AVAL. INICIAL EM OFTALMO - A PARTIR DE 9 ANOS",
         "secundarios": [
-            {"cod": "021106002-0", "qtd": "1"}, 
-            {"cod": "030101007-2", "qtd": "2"}, 
-            {"cod": "021106012-7", "qtd": "1"}, 
-            {"cod": "021106023-2", "qtd": "1"}, 
-            {"cod": "021106025-9", "qtd": "1"}, 
+            {"cod": "021106002-0", "qtd": "1"},
+            {"cod": "030101007-2", "qtd": "2"},
+            {"cod": "021106012-7", "qtd": "1"},
+            {"cod": "021106023-2", "qtd": "1"},
+            {"cod": "021106025-9", "qtd": "1"},
         ]
     },
-    # 0 a 8 Anos (5 Procedimentos)
     "090501001-9": {
         "descricao": "OCI AVAL. INICIAL EM OFTALMO - 0 A 8 ANOS",
         "secundarios": [
@@ -55,96 +136,50 @@ MAPA_PROCEDIMENTOS_OFTALMO = {
     }
 }
 
-# Mapeamento estático da Raça/Cor
 MAPA_RACA_COR = {
-    'BRANCA': '01',
-    'PRETA': '02',
-    'PARDA': '03',
-    'AMARELA': '04',
-    'INDIGENA': '05',
-    'INDÍGENA': '05' # Incluir variação acentuada, se necessário
+    "BRANCA": "01",
+    "PRETA": "02",
+    "PARDA": "03",
+    "AMARELA": "04",
+    "INDIGENA": "05",
+    "INDÍGENA": "05",
 }
 
 def mapear_raca_cor(raca_str: str) -> str:
-    # 🚨 DEBUG: O que a função está recebendo?
-    #print(f"\n[DEBUG RACA/COR] Valor de entrada (raca_str): '{raca_str}'")
-    
-    if not raca_str:
-        #print("[DEBUG RACA/COR] String de entrada vazia/None. Retornando '01' (Default).")
-        return '01' 
-        
-    raca_limpa = raca_str.strip().upper()
-    
-    # 🚨 DEBUG: O que a função está procurando no mapa?
-    #print(f"[DEBUG RACA/COR] Valor de busca (raca_limpa): '{raca_limpa}'")
-    
-    codigo_final = MAPA_RACA_COR.get(raca_limpa, '01')
-    
-    # 🚨 DEBUG: O que a função encontrou?
-    #print(f"[DEBUG RACA/COR] Código APAC retornado: {codigo_final}")
-    
-    return codigo_final
+    r = sanitize_basic(raca_str).upper()
+    return MAPA_RACA_COR.get(r, "01")
+
 
 def calcular_idade(data_nasc_str, data_consulta_str):
-    """Calcula a idade em anos completos."""
     try:
         nasc = datetime.strptime(data_nasc_str, "%Y%m%d").date()
-        consulta = datetime.strptime(data_consulta_str, "%Y%m%d").date()
-        idade = consulta.year - nasc.year - ((consulta.month, consulta.day) < (nasc.month, nasc.day))
-        return idade
-    except ValueError:
+        cons = datetime.strptime(data_consulta_str, "%Y%m%d").date()
+        return cons.year - nasc.year - ((cons.month, cons.day) < (nasc.month, nasc.day))
+    except Exception:
         return 0
 
+
 def selecionar_procedimento(idade):
-    """Retorna o dicionário de procedimentos (principal + secundários) baseado na idade."""
-    if idade >= 9:
-        return MAPA_PROCEDIMENTOS_OFTALMO["090501003-5"]
-    else:
-        return MAPA_PROCEDIMENTOS_OFTALMO["090501001-9"]
+    return MAPA_PROCEDIMENTOS_OFTALMO["090501003-5"] if idade >= 9 else MAPA_PROCEDIMENTOS_OFTALMO["090501001-9"]
+
 
 # ====================================================
-# FUNÇÃO DE CÁLCULO DE CONTROLE
+# CAMPO DE CONTROLE
 # ====================================================
 
 def calcular_campo_controle(lista_procedimentos, apac_numero):
-    """
-    Calcula o valor do Campo de Controle (4 dígitos) para o Registro 01 do Cabeçalho,
-    seguindo a PORTARIA/SAS Nº 197, DE 30 DE OUTUBRO DE 1998.
-
-    Args:
-        lista_procedimentos (list): Lista de dicionários de procedimentos, 
-                                    onde cada item tem 'cod' e 'qtd'.
-        apac_numero (str): Número da APAC (13 dígitos).
-
-    Returns:
-        str: O valor do campo de controle (4 dígitos, preenchido com zeros à esquerda).
-    """
-    
-    # 1. Somar o código de todos os procedimentos + quantidade + número da APAC.
-    
     try:
-        # Usaremos os 13 dígitos completos conforme o cálculo costuma exigir
-        soma = int(apac_numero)
-    except ValueError:
-        soma = 0 
+        soma = int(sanitize_numeric(apac_numero) or 0)
+    except Exception:
+        soma = 0
 
-    # Soma os códigos e quantidades de cada procedimento
     for proc in lista_procedimentos:
         try:
-            # O código do procedimento (10 dígitos) e a quantidade (7 dígitos) precisam ser somados.
-            cod_proc = proc['cod'].replace('-', '') 
-            qtd_proc = proc['qtd']
+            soma += int(sanitize_numeric(proc.get("cod", "")) or 0)
+            soma += int(sanitize_numeric(proc.get("qtd", "")) or 0)
+        except Exception:
+            pass
 
-            soma += int(cod_proc)
-            soma += int(qtd_proc)
-        except ValueError:
-            continue
-
-    # 2. Obter o resto da divisão do resultado acima por 1111.
     resto = soma % 1111
-
-    # 3. Somar 1111 ao resto da divisão acima.
-    campo_controle = resto + 1111
-
-    # Retorna o resultado formatado em 4 dígitos (ex: 0001)
-    return formatar_num(campo_controle, 4)
+    controle = resto + 1111
+    return formatar_num(controle, 4)

@@ -2,22 +2,37 @@ import pandas as pd
 from datetime import datetime
 import os
 import sys
-import apac_manager
+import unicodedata
 
-# Adiciona o diretório atual ao path para importar os módulos auxiliares
 sys.path.append(os.path.dirname(__file__))
 
-# Importa funções dos módulos auxiliares
-from utils import formatar_num, formatar_char, calcular_idade, selecionar_procedimento, MAPA_PROCEDIMENTOS_OFTALMO, FIM_LINHA, mapear_raca_cor
-from apac_manager import inicializar_manager, consumir_apac, salvar_numeracoes, salvar_relatorio_intervalo_apac
+from utils import (
+    formatar_num,
+    formatar_char,
+    calcular_idade,
+    selecionar_procedimento,
+    MAPA_PROCEDIMENTOS_OFTALMO,
+    FIM_LINHA,
+    mapear_raca_cor,
+    sanitize_basic
+)
+
+from apac_manager import (
+    inicializar_manager,
+    consumir_apac,
+    salvar_numeracoes,
+    salvar_relatorio_intervalo_apac
+)
+
 from header import montar_cabecalho
 from corpo import montar_corpo
 from variavel import montar_laudo_geral
-from procedimentos import gerar_bloco_procedimentos, montar_procedimento
+from procedimentos import gerar_bloco_procedimentos
 
-# ========================================================
-# CONSTANTES DE REFERÊNCIA (DEFAULTS)
-# ========================================================
+
+# ======================================================
+# CONSTANTES
+# ======================================================
 
 CNES_REF_DEFAULTS = {
     'apa_coduf': "35",
@@ -34,185 +49,223 @@ AUTORIZADOR_REF = {
     'apa cnsdir': "704800067495842",
 }
 
-# ========================================================
-# FUNÇÕES DE CONVERSÃO E LEITURA
-# ========================================================
+
+# ======================================================
+# UTILITÁRIOS LOCAIS
+# ======================================================
 
 def _converter_data_para_apac(data_str):
+    """DD/MM/YYYY -> YYYYMMDD"""
     if isinstance(data_str, (datetime, pd.Timestamp)):
         return data_str.strftime('%Y%m%d')
-    
-    data_limpa = str(data_str).split(' ')[0]
     try:
-        data_obj = datetime.strptime(data_limpa, '%d/%m/%Y')
-        return data_obj.strftime('%Y%m%d')
-    except ValueError:
-        return '00000000'
-
-
-def ler_csv_pacientes(filepath):
-    try:
-        df = pd.read_csv(filepath, delimiter=';', encoding='latin1')
-    except UnicodeDecodeError:
-        df = pd.read_csv(filepath, delimiter=';', encoding='cp1252')
+        base = str(data_str).split(" ")[0]
+        obj = datetime.strptime(base, "%d/%m/%Y")
+        return obj.strftime("%Y%m%d")
     except Exception:
-        df = pd.read_csv(filepath, delimiter=';')
-    
-    if df.columns[0].startswith('Unnamed'):
+        return "00000000"
+
+
+def remover_acentos_para_ascii(s: str) -> str:
+    """
+    Normaliza string para caracteres ASCII (remove acentos e símbolos não ASCII).
+    Retorna string (pode ficar vazia).
+    """
+    if s is None:
+        return ""
+    s = str(s)
+    # Normaliza e remove diacríticos; depois remove qualquer caractere não-ascii
+    nfkd = unicodedata.normalize('NFKD', s)
+    ascii_bytes = nfkd.encode('ASCII', 'ignore')
+    return ascii_bytes.decode('ASCII')
+
+
+def ler_csv_pacientes(fp):
+    """Lê CSV de pacientes com tolerância a encoding e padroniza colunas e datas."""
+    try:
+        df = pd.read_csv(fp, delimiter=";", encoding="latin1")
+    except UnicodeDecodeError:
+        df = pd.read_csv(fp, delimiter=";", encoding="cp1252")
+    except Exception:
+        df = pd.read_csv(fp, delimiter=";")
+
+    # Corrige primeira coluna vazia
+    if len(df.columns) > 0 and str(df.columns[0]).startswith("Unnamed"):
         df = df.iloc[:, 1:]
 
-    renaming_dict = {}
+
+    ren = {}
     for col in df.columns:
-        if 'Data/Hor' in col:
-            renaming_dict[col] = 'Data_Horario'
-        if 'Data/Horário' in col:
-            renaming_dict[col] = 'Data_Horario'
-        elif 'MÃ£e' in col or 'MÆe' in col or 'Mãe' in col:
-            renaming_dict[col] = 'Mae'
-        elif 'Ra‡a/Cor' in col or 'RaÃ§a/Cor' in col or 'Raça/Cor' in col:
-            renaming_dict[col] = 'Raca_Cor'
-        elif 'Profissional' in col:
-            renaming_dict[col] = 'Nome_Medico_Solicitante'
-        elif 'Unidade' in col:
-            renaming_dict[col] = 'Nome_Unidade_Solicitante'
-        elif 'Data de Nascimento' in col:
-            renaming_dict[col] = 'Data_Nascimento'
+        if "Hor" in col:
+            ren[col] = "Data_Horario"
+        elif "Mãe" in col or "MAE" in col or "MÃ£" in col:
+            ren[col] = "Mae"
+        elif "Ra" in col and "Cor" in col:
+            ren[col] = "Raca_Cor"
+        elif "Profissional" in col:
+            ren[col] = "Nome_Medico_Solicitante"
+        elif "Unidade" in col:
+            ren[col] = "Nome_Unidade_Solicitante"
+        elif "Nascimento" in col:
+            ren[col] = "Data_Nascimento"
 
-    df.rename(columns=renaming_dict, inplace=True)
+    if ren:
+        df.rename(columns=ren, inplace=True)
 
-    df['Data_Nascimento'] = df['Data_Nascimento'].apply(_converter_data_para_apac)
-    df['Data_Horario'] = df['Data_Horario'].apply(_converter_data_para_apac)
+    df["Data_Nascimento"] = df.get("Data_Nascimento", "").apply(_converter_data_para_apac)
+    df["Data_Horario"] = df.get("Data_Horario", "").apply(_converter_data_para_apac)
 
     return df
 
 
-# ========================================================
-# LOOKUPS
-# ========================================================
+def lookup_medico_cns(nome, df):
+    nome_l = sanitize_basic(nome).upper()
+    if not nome_l:
+        return {"apa_cnsres": formatar_num(0, 15), "nome_completo": ""}
 
-def lookup_medico_cns(nome_medico: str, df_medicos: pd.DataFrame) -> dict:
-    nome_medico_limpo = nome_medico.strip().upper()
-    medico_encontrado = df_medicos[
-        df_medicos['nome_completo'].str.strip().str.upper().str.contains(nome_medico_limpo, na=False)
-    ]
-    
-    if not medico_encontrado.empty:
-        cns = str(medico_encontrado['cartao_sus'].iloc[0])
-        nome = medico_encontrado['nome_completo'].iloc[0].strip()
-        return {'apa_cnsres': formatar_num(cns, 15), 'nome_completo': nome}
-    else:
-        return {'apa_cnsres': formatar_num(0, 15), 'nome_completo': nome_medico}
+    try:
+        match = df[df["nome_completo"].str.upper().str.contains(nome_l, na=False)]
+        if not match.empty:
+            cns = sanitize_basic(match.iloc[0]["cartao_sus"])
+            nm = sanitize_basic(match.iloc[0]["nome_completo"])
+            return {"apa_cnsres": formatar_num(cns, 15), "nome_completo": nm}
+    except Exception:
+        pass
 
-
-def lookup_cnes_data(nome_unidade: str, df_estabelecimentos: pd.DataFrame) -> dict:
-    nome_unidade_limpo = nome_unidade.strip().upper()
-    cnes_data = CNES_REF_DEFAULTS.copy()
-
-    unidade_encontrada = df_estabelecimentos[
-        df_estabelecimentos['desc_solicitante'].str.strip().str.upper().str.contains(nome_unidade_limpo, na=False)
-    ]
-
-    if not unidade_encontrada.empty:
-        cnes_cod = str(unidade_encontrada['cod_solicitante'].iloc[0])
-        cnes_data['cnes_solicitante'] = formatar_num(cnes_cod, 7)
-    else:
-        cnes_data['cnes_solicitante'] = formatar_num("5778204", 7)
-
-    return cnes_data
+    return {"apa_cnsres": formatar_num(0, 15), "nome_completo": nome_l}
 
 
-# ========================================================
-# GERAÇÃO DOS BLOCOS POR PACIENTE
-# ========================================================
+def lookup_cnes_data(unidade, df):
+    nome = sanitize_basic(unidade).upper()
+    base = CNES_REF_DEFAULTS.copy()
+    if not nome:
+        base["cnes_solicitante"] = "5778204"
+        return base
 
-def gerar_blocos_paciente(paciente_dict, apac_numero, medico_ref, cnes_data):
-    CNES_SOLICITANTE = cnes_ref['cnes_solicitante']
+    try:
+        match = df[df["desc_solicitante"].str.upper().str.contains(nome, na=False)]
+        if not match.empty:
+            cnes = sanitize_basic(match.iloc[0]["cod_solicitante"])
+            base["cnes_solicitante"] = formatar_num(cnes, 7)
+            return base
+    except Exception:
+        pass
 
-    if CNES_SOLICITANTE == '5778204':
-        cnes_terceiro_final = formatar_char('', 7)
-    else:
-        cnes_terceiro_final = CNES_SOLICITANTE
+    base["cnes_solicitante"] = "5778204"
+    return base
 
-    data_nascimento_fmt = paciente_dict['Data_Nascimento']
-    data_consulta_fmt = paciente_dict['Data_Horario']
-    competencia = 202510
 
-    nome_mae = paciente_dict.get('Mae', '') or paciente_dict.get('Mãe', '')
-    idade = calcular_idade(data_nascimento_fmt, data_consulta_fmt)
+# ======================================================
+# GERAÇÃO DO BLOCO (por paciente)
+# ======================================================
 
-    nome_responsavel = paciente_dict['Nome'] if idade >= 18 else nome_mae
+def gerar_blocos_paciente(p, apac_num, medico_ref, cnes_ref):
+    """
+    Gera blocos: corpo (14), laudo (06) e procedimentos (13s) para um paciente.
+    """
+    cnes_solic = cnes_ref.get("cnes_solicitante", "5778204")
+    cnes_terc = " " * 7 if cnes_solic == "5778204" else cnes_solic
+
+    nasc = sanitize_basic(p.get("Data_Nascimento"))
+    cons = sanitize_basic(p.get("Data_Horario"))
+
+    if not nasc or len(nasc) != 8:
+        raise ValueError(f"Data de nascimento inválida: {nasc}")
+    if not cons or len(cons) != 8:
+        raise ValueError(f"Data de consulta inválida: {cons}")
+
+    idade = calcular_idade(nasc, cons)
 
     proc_sel = selecionar_procedimento(idade)
-    cod_principal = next(key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items() if value == proc_sel)
+    try:
+        cod_princ = next(k for k, v in MAPA_PROCEDIMENTOS_OFTALMO.items() if v == proc_sel)
+    except StopIteration:
+        raise ValueError("Procedimento principal não encontrado.")
 
-    raca_paciente_codigo = mapear_raca_cor(paciente_dict.get('Raca_Cor', ''))
+    cod_princ_fmt = cod_princ.replace("-", "")
 
-    dados_apac = {
-        'apa_corpo': 14,
-        'apa_cmp': competencia,
-        'apa_num': apac_numero,
-        'apa_coduf': cnes_ref['apa_coduf'],
-        'apa_codcnes': '5778204',
-        'apa_pr': data_consulta_fmt,
-        'apa_dtiinval': data_consulta_fmt,
-        'apa_dtfimval': data_consulta_fmt,
-        'apa_tipate': '00',
-        'apa_tipapac': '3',
-        'apa_motsaida': '12',
-        'apa_dtobitoalta': data_consulta_fmt,
-        'apa_datsol': data_consulta_fmt,
-        'apa_dataut': data_consulta_fmt,
-        'apa_codemis': 'M351620001',
-        'apa_carate': '01',
-        'apa_apacant': '0',
-        'apa_nascpcnte': '010',
-        'APA_etnia': '0000',
-        'apa_cdlogr': '081',
-        'apa_dddtelcontato': '',
-        'apa_email': '',
-        'apa_strua': 'N',
-        'apa_codsol': CNES_SOLICITANTE,
-        'apa_npront': '',
-        'apa_cplpcnte': '',
+    raca = mapear_raca_cor(sanitize_basic(p.get("Raca_Cor", "")))
 
-        'apa_nomepcnte': paciente_dict.get('Nome', ''),
-        'apa_nomemae': paciente_dict.get('Mae', ''),
-        'apa_nomeresp_pcte': nome_responsavel,
-        'apa_logpcnte': paciente_dict.get('Rua', ''),
-        'apa_numpcnte': str(paciente_dict.get('Nro', '0')),
-        'apa_ceppcnte': str(paciente_dict.get('CEP', '0')),
-        'apa_munpcnte': cnes_ref['cod_mun_ibge'],
-        'apa_datanascim': data_nascimento_fmt,
-        'apa_sexopcnte': paciente_dict.get('Sexo', 'I')[0],
-        'apa_raca': raca_paciente_codigo,
-        'apa_cpfpcnte': str(paciente_dict.get('CPF', '0')),
-        'apa_bairro': paciente_dict.get('Bairro', ''),
-        'apa_telcontato': str(paciente_dict.get('Contato 1', '')),
-        'apa_ine': '',
-        'cid_paciente': paciente_dict.get('CID', '').replace('.', ''),
+    cid_raw = sanitize_basic(p.get("CID", "")).upper()
+    cid = "".join(ch for ch in cid_raw if ch.isalnum())[:4]
 
-        'apa_codprinc': cod_principal.replace('-', ''),
-        'apa_nomediretor': AUTORIZADOR_REF['apa nomediretor'],
-        'apa_cnspct': str(paciente_dict.get('Cartão SUS', '')),
-        'apa_cnsres': medico_ref['apa_cnsres'],
-        'apa_cnsdir': AUTORIZADOR_REF['apa cnsdir'],
-        'apa_cnsexec': medico_ref['apa_cnsres'],
-        'apa_nomeresp': medico_ref['nome_completo'],
+    mae = sanitize_basic(p.get("Mae", ""))
+    nome_resp = sanitize_basic(p.get("Nome", "")) if idade >= 18 else mae
+
+    dados = {
+        "apa_corpo": 14,
+        "apa_cmp": formatar_num("202510", 6),
+        "apa_num": apac_num,
+        "apa_coduf": cnes_ref.get("apa_coduf", CNES_REF_DEFAULTS["apa_coduf"]),
+        "apa_codcnes": "5778204",
+        "apa_pr": cons,
+        "apa_dtiinval": cons,
+        "apa_dtfimval": cons,
+        "apa_tipate": "00",
+        "apa_tipapac": "3",
+        "apa_motsaida": "12",
+        "apa_dtobitoalta": cons,
+        "apa_datsol": cons,
+        "apa_dataut": cons,
+        "apa_codemis": "M351620001",
+        "apa_carate": "01",
+        "apa_apacant": "0",
+        "apa_nascpcnte": "010",
+        "APA_etnia": "",
+        "apa_cdlogr": "081",
+
+        "apa_dddtelcontato": formatar_char(sanitize_basic(p.get("DDD")), 2),
+        "apa_email": sanitize_basic(p.get("Email", "")),
+        "apa_strua": "N",
+        "apa_codsol": formatar_char(cnes_solic, 7),
+        "apa_npront": "",
+        "apa_cplpcnte": "",
+
+        "apa_nomepcnte": sanitize_basic(p.get("Nome", "")),
+        "apa_nomemae": mae,
+        "apa_nomeresp_pcte": nome_resp,
+        "apa_logpcnte": sanitize_basic(p.get("Rua", "")),
+
+        # nº residência: CHAR(5) conforme layout oficial
+        "apa_numpcnte": formatar_char(sanitize_basic(p.get("Nro", "")), 5),
+        "apa_ceppcnte": formatar_num(sanitize_basic(p.get("CEP", "")), 8),
+        "apa_munpcnte": cnes_ref.get("cod_mun_ibge", CNES_REF_DEFAULTS["cod_mun_ibge"]),
+
+        "apa_datanascim": nasc,
+        "apa_sexopcnte": sanitize_basic(p.get("Sexo", "I"))[:1] or "I",
+        "apa_raca": raca,
+        "apa_cpfpcnte": formatar_num(sanitize_basic(p.get("CPF", "")), 11),
+
+        "apa_bairro": sanitize_basic(p.get("Bairro", "")),
+        "apa_telcontato": formatar_char(sanitize_basic(p.get("Contato 1", "")), 9),
+        "apa_ine": "",
+
+        "cid_paciente": cid,
+        "cid_secundario": "",
+
+        "apa_codprinc": cod_princ_fmt,
+
+        "apa_nomediretor": AUTORIZADOR_REF["apa nomediretor"],
+        "apa_cnspct": formatar_num(sanitize_basic(p.get("Cartão SUS", "")), 15),
+        "apa_cnsres": medico_ref.get("apa_cnsres", formatar_num(0, 15)),
+        "apa_cnsdir": AUTORIZADOR_REF["apa cnsdir"],
+        "apa_cnsexec": medico_ref.get("apa_cnsres", formatar_num(0, 15)),
+        "apa_nomeresp": medico_ref.get("nome_completo", "")
     }
 
-    blocos = []
-    blocos.append(montar_corpo(dados_apac))
-    blocos.append(montar_laudo_geral(competencia, apac_numero, dados_apac['cid_paciente']))
-    blocos.extend(gerar_bloco_procedimentos(idade, competencia, apac_numero, cnes_terceiro_final))
+    linhas = []
+    linhas.append(montar_corpo(dados))
+    linhas.append(montar_laudo_geral(dados["apa_cmp"], apac_num, dados["cid_paciente"]))
+    linhas.extend(gerar_bloco_procedimentos(idade, dados["apa_cmp"], apac_num, cnes_terc))
 
-    return blocos
+    return linhas
 
 
-# ========================================================
-# MÓDULO PRINCIPAL
-# ========================================================
+# ======================================================
+# MAIN
+# ======================================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     FP_PACIENTES = "PEDRO.csv"
     FP_MEDICOS = "medicos.csv"
@@ -222,87 +275,69 @@ if __name__ == '__main__':
     OUTPUT_FILE = "remessa_final_simulacao.txt"
 
     print(f"Iniciando simulação para competência {COMPETENCIA}...")
-
-    # INICIALIZAR APACs NA MEMÓRIA
-    try:
-        inicializar_manager()
-    except Exception as e:
-        print(f"ERRO CRÍTICO na inicialização do APAC Manager: {e}")
-        sys.exit(1)
+    inicializar_manager()
 
     try:
-        df_pacientes = ler_csv_pacientes(FP_PACIENTES)
-        df_medicos = pd.read_csv(FP_MEDICOS, delimiter=';')
-        df_estabelecimentos = pd.read_csv(FP_ESTABELECIMENTOS, delimiter=';')
-    except Exception as e:
-        print(f"ERRO CRÍTICO: {e}")
-        sys.exit(1)
+        df_p = ler_csv_pacientes(FP_PACIENTES)
+    except FileNotFoundError:
+        print(f"Arquivo de pacientes não encontrado: {FP_PACIENTES}")
+        raise
 
-    linhas_finais = []
-    apacs_processadas = 0
+    df_m = pd.read_csv(FP_MEDICOS, delimiter=";")
+    df_e = pd.read_csv(FP_ESTABELECIMENTOS, delimiter=";")
 
-    primeira_apac_usada = None
-    ultima_apac_usada = None
+    linhas = []
+    primeira = None
+    ultima = None
+    total = 0
 
-    # LOOP PRINCIPAL
-    for index, paciente in df_pacientes.iterrows():
-
-        apac_numero_base, restantes = consumir_apac()
-
-        if not apac_numero_base:
-            print("Numerações APAC esgotadas.")
+    for idx, paciente in df_p.iterrows():
+        apac_num, rest = consumir_apac()
+        if not apac_num:
+            print("Numerações esgotadas.")
             break
 
-        # REGISTRA INTERVALO
-        if primeira_apac_usada is None:
-            primeira_apac_usada = apac_numero_base
-        ultima_apac_usada = apac_numero_base
+        if primeira is None:
+            primeira = apac_num
+        ultima = apac_num
 
-        dados_paciente = paciente.to_dict()
-        nome_medico = dados_paciente['Nome_Medico_Solicitante']
-        nome_unidade = dados_paciente['Nome_Unidade_Solicitante']
-
-        medico_ref = lookup_medico_cns(nome_medico, df_medicos)
-        cnes_ref = lookup_cnes_data(nome_unidade, df_estabelecimentos)
+        med_ref = lookup_medico_cns(sanitize_basic(paciente.get("Nome_Medico_Solicitante", "")), df_m)
+        cnes_ref = lookup_cnes_data(sanitize_basic(paciente.get("Nome_Unidade_Solicitante", "")), df_e)
 
         try:
-            blocos = gerar_blocos_paciente(dados_paciente, apac_numero_base, medico_ref, cnes_ref)
-            linhas_finais.extend(blocos)
-            apacs_processadas += 1
+            blocos = gerar_blocos_paciente(paciente.to_dict(), apac_num, med_ref, cnes_ref)
+            linhas.extend(blocos)
+            total += 1
         except Exception as e:
-            print(f"ERRO ao gerar a APAC {apac_numero_base}: {e}")
+            print(f"\n❌ ERRO ao gerar APAC {apac_num}")
+            print(f"Paciente: {sanitize_basic(paciente.get('Nome','(sem nome)'))}")
+            print(f"Index linha source: {idx}")
+            print(f"Erro: {type(e).__name__}: {e}\n")
+            continue
 
-    # FINALIZA REMESSA
-    if linhas_finais:
+    # Monta header final
+    header_final = montar_cabecalho(COMPETENCIA, cnes_ref, total, [], ultima)
+    linhas.insert(0, header_final)
 
-        lista_procedimentos_para_controle = []
-        for linha in linhas_finais:
-            if linha.startswith("13"):
-                lista_procedimentos_para_controle.append({'cod': '090000000-0', 'qtd': '1'})
+    # Antes de salvar: remover acentos e garantir ASCII
+    def linha_para_ascii(linha: str) -> str:
+        # Montagem final: remover caracteres Unicode que possam quebrar a escrita
+        # mantém CRLF que já está dentro de cada registro
+        return remover_acentos_para_ascii(linha)
 
-        header_final = montar_cabecalho(
-            COMPETENCIA,
-            cnes_ref,
-            apacs_processadas,
-            lista_procedimentos_para_controle,
-            ultima_apac_usada
-        )
+    try:
+        with open(OUTPUT_FILE, "wb") as f:
+            for l in linhas:
+                l_ascii = linha_para_ascii(l)
+                f.write(l_ascii.encode("ascii"))
+    except Exception as e:
+        print(f"ERRO ao salvar arquivo de remessa '{OUTPUT_FILE}': {type(e).__name__}: {e}")
+        raise
 
-        linhas_finais.insert(0, header_final)
+    salvar_numeracoes()
+    salvar_relatorio_intervalo_apac(OUTPUT_FILE, primeira, ultima)
 
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.writelines(linhas_finais)
-
-        print("Processamento Finalizado.")
-        salvar_numeracoes()
-
-        # 🔥 AQUI CRIA O ARQUIVO intervalo_apac.txt
-        salvar_relatorio_intervalo_apac(
-            OUTPUT_FILE,
-            primeira_apac_usada,
-            ultima_apac_usada
-        )
-
-        print(f"Arquivo de remessa salvo em: {OUTPUT_FILE}")
-        print(f"Primeira APAC: {primeira_apac_usada}")
-        print(f"Última APAC: {ultima_apac_usada}")
+    print("Processamento finalizado.")
+    print(f"Arquivo gerado: {OUTPUT_FILE}")
+    print(f"Primeira APAC: {primeira}")
+    print(f"Última APAC: {ultima}")

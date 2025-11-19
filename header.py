@@ -1,44 +1,89 @@
 from datetime import datetime
-from utils import formatar_num, formatar_char, FIM_LINHA, calcular_campo_controle
+from utils import (
+    formatar_num,
+    formatar_char,
+    sanitize_basic,
+    FIM_LINHA,
+    calcular_campo_controle
+)
 
-def montar_cabecalho(competencia, cnes_dados, total_apacs_gravadas, lista_procedimentos, apac_numero):
+
+def montar_cabecalho(competencia, cnes_dados, total_apacs_gravadas, lista_procedimentos, apac_primeira):
     """
-    Monta o registro 01 (CABEÇALHO). Tamanho total: 139 (137 dados + FIM_LINHA).
-    
-    Argumentos:
-        competencia (str): Mês de produção (YYYYMM).
-        cnes_dados (dict): Dados do CNES/Prestador.
-        total_apacs_gravadas (int): Contagem de APACs a serem geradas no arquivo.
-        lista_procedimentos (list): Lista de todos os procedimentos para cálculo do controle. <--- NOVO
-        apac_numero (str): Número da primeira APAC para cálculo do controle. <--- NOVO
+    Registro 01 – Cabeçalho da Remessa APAC
+    Tamanho total: 139 caracteres (137 dados + CRLF)
+
+    Campos:
+        01 – Indicador (01) ....................... 2
+        02 – Literal "#APAC" ...................... 5
+        03 – Competência (AAAAMM) ................. 6
+        04 – Qtde APACs geradas ................... 6
+        05 – Campo de controle ..................... 4
+        06 – Nome órgão origem .................... 30
+        07 – Sigla órgão origem .................... 6
+        08 – CGC/CPF Prestador .................... 14
+        09 – Nome órgão destino ................... 40
+        10 – Indicador destino ..................... 1
+        11 – Data geração (AAAAMMDD) ............... 8
+        12 – Versão ................................ 15
     """
-    competencia_fmt = formatar_num(competencia, 6)
+
+    # Sanitização
+    competencia = sanitize_basic(competencia)
+    total_apacs_gravadas = sanitize_basic(total_apacs_gravadas)
+
+    # Campo de controle (método oficial DATASUS)
+    campo_controle = calcular_campo_controle(lista_procedimentos, apac_primeira)
+
+    # Dados do CNES
+    nome_orgao = sanitize_basic(cnes_dados.get("cbc-rsp", ""))
+    sigla_orgao = sanitize_basic(cnes_dados.get("cbc-sgl", ""))
+    cgc = sanitize_basic(cnes_dados.get("cbc-cgccpf", ""))
+    nome_destino = sanitize_basic(cnes_dados.get("cbc-dst", ""))
+    indicador_destino = sanitize_basic(cnes_dados.get("cbc-dst-in", ""))[:1]
+
     data_geracao = datetime.now().strftime("%Y%m%d")
-    
-    # Dados de Referência CNES (Mapeamento)
-    nome_orgao = cnes_dados.get('cbc-rsp', 'PEDRO TRIES')
-    sigla_orgao = cnes_dados.get('cbc-sgl', 'SECRET')
-    cgc_prestador = cnes_dados.get('cbc-cgccpf', '47970769000104')
-    nome_destino = cnes_dados.get('cbc-dst', 'SMS')
-    indicador_destino = cnes_dados.get('cbc-dst-in', 'M')
 
-    # NOVO: Calcula o Campo de Controle, chamando a função com os argumentos
-    campo_controle = calcular_campo_controle(lista_procedimentos, apac_numero)
+    r = ""
 
-    registro = "01" # 1. Indicador de linha 01 (2)
-    registro += formatar_char("#APAC", 5) # 2. CHAR #APAC (5)
-    registro += competencia_fmt # 3. Ano e mês da produção (6)
-    registro += formatar_num(total_apacs_gravadas, 6) # 4. Quantidade de APACs gravadas (6)
-    registro += campo_controle # 5. Campo de controle (4) <--- FUNÇÃO CORRETAMENTE CHAMADA
-    registro += formatar_char(nome_orgao, 30) # 6. Nome do órgão de origem (30)
-    registro += formatar_char(sigla_orgao, 6) # 7. Sigla ou código do órgão (6)
-    registro += formatar_num(cgc_prestador, 14) # 8. CGC/CPF do prestador (14)
-    registro += formatar_char(nome_destino, 40) # 9. Nome do órgão de destino (40)
-    registro += formatar_char(indicador_destino, 1) # 10. Indicador de destino (1)
-    registro += formatar_num(data_geracao, 8) # 11. Data de geração (8)
-    registro += formatar_char("VERSAO 03.18", 15) # 12. Versão (15)
-    registro += FIM_LINHA # Fim da linha (2)
-    
-    if len(registro) != 139:
-         raise ValueError(f"Erro de formatação no Registro 01: Tamanho incorreto ({len(registro)}).")
-    return registro
+    # 1. Indicador
+    r += "01"
+
+    # 2. Literal: "#APAC"
+    r += formatar_char("#APAC", 5)
+
+    # 3. Competência
+    r += formatar_num(competencia, 6)
+
+    # 4. Qtde APACs gravadas
+    r += formatar_num(total_apacs_gravadas, 6)
+
+    # 5. Campo de controle
+    r += formatar_num(campo_controle, 4)
+
+    # 6. Nome órgão origem
+    r += formatar_char(nome_orgao, 30)
+
+    # 7. Sigla
+    r += formatar_char(sigla_orgao, 6)
+
+    # 8. CGC/CPF prestador
+    r += formatar_num(cgc, 14)
+
+    # 9. Nome órgão destino
+    r += formatar_char(nome_destino, 40)
+
+    # 10. Indicador destino
+    r += formatar_char(indicador_destino, 1)
+
+    # 11. Data geração
+    r += formatar_num(data_geracao, 8)
+
+    # 12. Versão do layout
+    r += formatar_char("Versão 03.18", 15)
+
+    # Validação de tamanho
+    if len(r) != 137:
+        raise ValueError(f"Registro 01 inválido ({len(r)} chars). Esperado: 137")
+
+    return r + FIM_LINHA

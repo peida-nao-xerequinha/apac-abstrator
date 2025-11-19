@@ -1,74 +1,123 @@
-from utils import formatar_num, formatar_char, FIM_LINHA, selecionar_procedimento, MAPA_PROCEDIMENTOS_OFTALMO
+from utils import (
+    formatar_num,
+    formatar_char,
+    sanitize_basic,
+    FIM_LINHA
+)
+
+from utils import selecionar_procedimento, MAPA_PROCEDIMENTOS_OFTALMO
+
 
 def montar_procedimento(competencia, apac_numero, cod_proc, qtd, cnes_terceiro):
     """
-    Monta uma única linha do registro 13 (REGISTRO DE PROCEDIMENTOS/AÇÕES). 
-    Tamanho total: 99 (97 dados + FIM_LINHA).
+    Registro 13 – Procedimentos/Ações Realizadas.
+    Tamanho total: 99 caracteres (incluindo CRLF do campo FIM).
+
+    O CRLF faz parte do campo 16, então ELE entra na contagem.
     """
-    cbo = '225265'
-    
-    registro_replicate = "13" # 2
-    registro_replicate += formatar_num(competencia, 6) # 6
-    registro_replicate += formatar_num(apac_numero, 13) # 13
-    registro_replicate += formatar_num(cod_proc.replace('-', ''), 10) # 10
-    registro_replicate += formatar_num(cbo, 6) # 6
-    registro_replicate += formatar_num(qtd, 7) # 6. Quantidade de procedimentos (7)
-    
-    # --- PREENCHIMENTO DE CAMPOS OPCIONAIS (ADJACENTES A QUANTIDADE) ---
-    # Para replicar o alvo (que não usa zeros em NUM opcionais):
-    
-    # 7. CNPJ cessão (pap CGC - NUM, 14) -> Usar CHAR para espaço, replicando o alvo
-    registro_replicate += formatar_char('', 14) 
-    
-    # 8. Número NF Cessão (pap NF - CHAR, 6)
-    registro_replicate += formatar_char('', 6)
-    
-    # 9. CID Principal (pap_CIDP - CHAR, 4)
-    registro_replicate += formatar_char('', 4)
-    
-    # 10. CID Secundário (pap_CIDS - CHAR, 4)
-    registro_replicate += formatar_char('', 4)
-    
-    # 11. Código do Serviço (pap SRV - CHAR, 3)
-    registro_replicate += formatar_char('', 3)
-    
-    # 12. Código da Classificação (pap CLF - NUM, 3) -> Usar CHAR para espaço
-    registro_replicate += formatar_char('', 3) 
-    
-    # 13. Código da Sequência da Equipe (pap equipe Seq - NUM, 8) -> Usar CHAR para espaço
-    registro_replicate += formatar_char('', 8)
-    
-    # 14. Código da Área da Equipe (pap equipe Area - NUM, 4) -> Usar CHAR para espaço
-    registro_replicate += formatar_char('', 4)
 
-    # 15. Código da Unidade Prestadora Terceiro (pap_cnes_terc - NUM, 7)
-    # INJEÇÃO FINAL DO CNES TERCEIRO (3312445)
-    registro_replicate += formatar_char(cnes_terceiro, 7) 
+    competencia = sanitize_basic(competencia)
+    apac_numero = sanitize_basic(apac_numero)
+    cod_proc = sanitize_basic(cod_proc).replace("-", "")
+    qtd = sanitize_basic(qtd)
+    cnes_terceiro = sanitize_basic(cnes_terceiro)
 
-    registro_replicate += FIM_LINHA
-    
-    if len(registro_replicate) != 99:
-         raise ValueError(f"Erro de formatação no Registro 13: Tamanho incorreto ({len(registro_replicate)}).")
-    
-    return registro_replicate
+    CBO = "225265"
+
+    r = ""
+
+    # 1. Indicador
+    r += "13"
+
+    # 2. Competência
+    r += formatar_num(competencia, 6)
+
+    # 3. APAC
+    r += formatar_num(apac_numero, 13)
+
+    # 4. Procedimento
+    r += formatar_num(cod_proc, 10)
+
+    # 5. CBO
+    r += formatar_num(CBO, 6)
+
+    # 6. Quantidade
+    r += formatar_num(qtd, 7)
+
+    # 7. CNPJ cessão – espaços
+    r += formatar_char("", 14)
+
+    # 8. Nº NF – espaços
+    r += formatar_char("", 6)
+
+    # 9. CID principal – espaços
+    r += formatar_char("", 4)
+
+    # 10. CID secundário – espaços
+    r += formatar_char("", 4)
+
+    # 11. Serviço – espaços
+    r += formatar_char("", 3)
+
+    # 12. Classificação – espaços
+    r += formatar_char("", 3)
+
+    # 13. Sequência equipe – espaços
+    r += formatar_char("", 8)
+
+    # 14. Área equipe – espaços
+    r += formatar_char("", 4)
+
+    # 15. CNES terceiro
+    r += formatar_char(cnes_terceiro, 7)
+
+    # 16. FIM (faz parte do registro!)
+    r += "\r\n"
+
+    # -------------------------------------------------------
+    # VALIDAÇÃO FINAL — Registro tem que ter EXATAMENTE 99
+    # -------------------------------------------------------
+    if len(r) != 99:
+        raise ValueError(
+            f"Registro 13 com tamanho inválido: {len(r)} (esperado 99)"
+        )
+
+    return r
 
 
-def gerar_bloco_procedimentos(paciente_idade, competencia, apac_numero, cnes_terceiro):
-    # ... (Esta função é mantida, pois a lógica de idade e loop está correta)
-    proc_selecionado = selecionar_procedimento(paciente_idade)
-    cod_principal = next(key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items() if value == proc_selecionado)
-    
-    linhas_procedimentos = []
-    
-    # 1. Procedimento Principal
-    linhas_procedimentos.append(montar_procedimento(
-        competencia, apac_numero, cod_principal, "1", ""
-    ))
-    
-    # 2. Procedimentos Secundários
-    for proc_sec in proc_selecionado['secundarios']:
-        linhas_procedimentos.append(montar_procedimento(
-            competencia, apac_numero, proc_sec['cod'], proc_sec['qtd'], cnes_terceiro
-        ))
-        
-    return linhas_procedimentos
+def gerar_bloco_procedimentos(idade, competencia, apac_numero, cnes_terceiro):
+    """
+    Gera:
+        - 1 procedimento principal
+        - N procedimentos secundários
+    """
+
+    proc_sel = selecionar_procedimento(idade)
+
+    cod_principal = next(
+        key for key, value in MAPA_PROCEDIMENTOS_OFTALMO.items()
+        if value == proc_sel
+    )
+
+    linhas = []
+
+    # Procedimento principal
+    linhas.append(
+        montar_procedimento(
+            competencia, apac_numero, cod_principal, "1", ""
+        )
+    )
+
+    # Procedimentos secundários
+    for proc in proc_sel["secundarios"]:
+        linhas.append(
+            montar_procedimento(
+                competencia,
+                apac_numero,
+                proc["cod"],
+                proc["qtd"],
+                cnes_terceiro
+            )
+        )
+
+    return linhas
