@@ -8,7 +8,7 @@ from utils import (
 )
 
 
-def montar_cabecalho(competencia, cnes_dados, total_apacs_gravadas, lista_procedimentos, apac_primeira):
+def montar_cabecalho(competencia, cnes_dados, total_apacs_gravadas, lista_procedimentos, apac_primeira, versao):
     """
     Registro 01 – Cabeçalho da Remessa APAC
     Tamanho total: 139 caracteres (137 dados + CRLF)
@@ -80,7 +80,7 @@ def montar_cabecalho(competencia, cnes_dados, total_apacs_gravadas, lista_proced
     r += formatar_num(data_geracao, 8)
 
     # 12. Versão do layout
-    r += formatar_char("Versão 03.18", 15)
+    r += formatar_char(versao, 15)
 
     # Validação de tamanho
     if len(r) != 137:

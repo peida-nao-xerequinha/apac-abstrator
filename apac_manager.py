@@ -4,7 +4,10 @@ import shutil
 from datetime import datetime
 
 # Defina o nome do arquivo da numeração
-NOME_ARQUIVO_NUMERACAO = "Numeração OCI.TXT"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PASTA_DATA = os.path.join(BASE_DIR, "data")
+os.makedirs(PASTA_DATA, exist_ok=True)
+NOME_ARQUIVO_NUMERACAO = os.path.join(PASTA_DATA, "Numeração OCI.TXT")
 
 def backup_arquivo_numeracao():
     """
@@ -145,3 +148,15 @@ def salvar_relatorio_intervalo_apac(caminho_remessa, primeira_apac, ultima_apac)
     
     except Exception as e:
         print(f"Erro ao gerar arquivo de intervalo: {e}")
+
+def get_numeracoes_disponiveis() -> List[str]:
+    """Expõe a leitura do arquivo para a GUI, sem inicializar o manager."""
+    return _ler_numeracoes_disco()
+
+# No apac_manager.py, adicione:
+
+def devolver_apac(apac_num: str):
+    """Devolve a APAC à lista (uso em caso de erro de processamento)."""
+    global NUMERACOES_APAC_MEMORIA
+    # Usa insert(0) para colocar de volta no início da lista (onde foi consumida)
+    NUMERACOES_APAC_MEMORIA.insert(0, apac_num)
