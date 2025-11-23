@@ -1,5 +1,3 @@
-# main.py (CÓDIGO REESCRITO E FINAL)
-
 import os
 import sys
 import unicodedata
@@ -9,18 +7,26 @@ import pandas as pd
 from datetime import datetime
 from PySide6 import QtCore, QtWidgets, QtGui
 
-BASE_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(BASE_DIR, "data")
-INPUT_DIR = os.path.join(BASE_DIR, "input")
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+if getattr(sys, 'frozen', False):
+    APPLICATION_PATH = os.path.dirname(sys.executable)
+else:
+    APPLICATION_PATH = os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR    = APPLICATION_PATH
+DATA_DIR    = os.path.join(BASE_DIR, "data")
+INPUT_DIR   = os.path.join(BASE_DIR, "input")
+OUTPUT_DIR  = os.path.join(BASE_DIR, "output")
+ASSETS_DIR  = os.path.join(BASE_DIR, "assets")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-sys.path.append(BASE_DIR)
+if getattr(sys, 'frozen', False):
+    qt_plugins = os.path.join(BASE_DIR, "PySide6", "plugins")
+    if os.path.isdir(qt_plugins):
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_plugins
 
 from utils import (
     formatar_num,
@@ -38,8 +44,8 @@ from apac_manager import (
     consumir_apac,
     salvar_numeracoes,
     salvar_relatorio_intervalo_apac,
-    get_numeracoes_disponiveis, # NOVO: Para contagem inicial na GUI
-    devolver_apac,               # NOVO: Para devolver em caso de erro
+    get_numeracoes_disponiveis,
+    devolver_apac,
     NUMERACOES_APAC_MEMORIA
 )
 
@@ -218,7 +224,7 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
     FP_MEDICOS = os.path.join(DATA_DIR, "medicos.csv")
     FP_ESTAB = os.path.join(DATA_DIR, "estabelecimentos.csv")
     
-    # 2. INICIALIZAÇÃO AGORA OCORRE AQUI (Gera backup e carrega NUMERACOES_APAC_MEMORIA)
+    # INICIALIZAÇÃO AGORA OCORRE AQUI (Gera backup e carrega NUMERACOES_APAC_MEMORIA)
     inicializar_manager()
     
     df_p = ler_csv_pacientes(fp_pacientes)
@@ -232,12 +238,9 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
     
     for idx, paciente in df_p.iterrows():
         
-        # 3. Consome a APAC antes, mas com a função de devolução implementada,
-        # o fluxo é seguro.
         apac_num_tentativa, rest = consumir_apac()
         
         if not apac_num_tentativa:
-            # Envia o status para a GUI (o _worker tratará a exceção)
             raise Exception("Numerações APAC esgotadas.")
             
         med_ref = lookup_medico_cns(sanitize_basic(paciente.get("Nome_Medico_Solicitante", "")), df_m)
@@ -260,7 +263,7 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
                 atualizar_status(total)
                 
         except Exception as e:
-            # 4. FALHA: Devolve o número da APAC para o pool
+            # FALHA: Devolve o número da APAC para o pool
             devolver_apac(apac_num_tentativa)
             
             if atualizar_status:
@@ -277,7 +280,7 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
         for l in linhas:
             f.write(remover_acentos_para_ascii(l).encode("ascii"))
             
-    # 5. Salva o estado FINAL das numerações (excluindo as usadas)
+    # Salva o estado FINAL das numerações (excluindo as usadas)
     salvar_numeracoes()
     salvar_relatorio_intervalo_apac(OUTPUT_FILE, primeira, ultima)
     
@@ -289,8 +292,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # 1. ATUALIZAÇÃO DA CONTAGEM: Lê direto do arquivo SEM INICIALIZAR o manager
-        # Resolve o problema de backup e contagem zerada ao iniciar a GUI
+        # Lê direto do arquivo SEM INICIALIZAR o manager
         num_oci = len(get_numeracoes_disponiveis()) 
         
         self.setWindowTitle("Gerador de Remessa APAC")
@@ -501,27 +503,24 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             arq, total_geradas, primeira, ultima = processar_remessa(fp, comp, vers, atualizar_status=atualizar_status)
             
-            # Atualiza a contagem final na GUI
-            final_num_oci = len(NUMERACOES_APAC_MEMORIA)
-            QtCore.QMetaObject.invokeMethod(self.lbl_numeracoes, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f"Numerações APAC disponíveis: {final_num_oci}"))
-
+            # --- MODIFICADO: Remove a lógica de contagem e passagem de argumento ---
+            
             QtCore.QMetaObject.invokeMethod(self, "_on_finished", QtCore.Qt.QueuedConnection,
                                             QtCore.Q_ARG(str, arq), QtCore.Q_ARG(int, total_geradas),
                                             QtCore.Q_ARG(str, str(primeira)), QtCore.Q_ARG(str, str(ultima)))
+
         except Exception as e:
             QtCore.QMetaObject.invokeMethod(self, "_on_error", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, str(e)))
 
+    # --- MODIFICADO: Retorna à assinatura original (sem final_num_oci) ---
     @QtCore.Slot(str, int, str, str)
-    def _on_finished(self, arq, total_geradas, primeira, ultima):
+    def _on_finished(self, arq, total_geradas, primeira, ultima): 
         self.progress.setValue(100)
         self.status_label.setText(f"Concluído: {total_geradas} APACs ({primeira} → {ultima})")
         self.historico_signal.emit(f"✅ SUCESSO! Arq.: {arq}, {total_geradas} APACs.")
         
-        # Obtém a contagem final
-        final_num_oci = len(NUMERACOES_APAC_MEMORIA)
-        self.lbl_numeracoes.setText(f"Numerações APAC disponíveis: {final_num_oci}")
+        # --- REMOVIDO: Atualização de self.lbl_numeracoes ---
         
-        # AÇÃO ÚNICA: Notifica o usuário e habilita o botão
         QtWidgets.QMessageBox.information(self, "Sucesso", f"Arquivo gerado: {arq}\nTotal APACs: {total_geradas}\n{primeira} → {ultima}")
         self.btn_gerar.setEnabled(True)
 
@@ -531,9 +530,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label.setText("Status: Erro!")
         self.historico_signal.emit(f"❌ ERRO: {msg.splitlines()[0]}")
         
-        # Atualiza a contagem final em caso de erro
-        final_num_oci = len(NUMERACOES_APAC_MEMORIA)
-        QtCore.QMetaObject.invokeMethod(self.lbl_numeracoes, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f"Numerações APAC disponíveis: {final_num_oci}"))
+        # --- REMOVIDO: Atualização de self.lbl_numeracoes ---
 
         QtWidgets.QMessageBox.critical(self, "Erro", msg)
         self.btn_gerar.setEnabled(True)
