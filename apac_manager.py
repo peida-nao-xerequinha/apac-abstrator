@@ -1,162 +1,109 @@
 import os
-from typing import List, Tuple
+import sys
 import shutil
 from datetime import datetime
+from typing import List, Tuple
 
-# Defina o nome do arquivo da numeração
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PASTA_DATA = os.path.join(BASE_DIR, "data")
+def _caminho_data() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.join(os.path.dirname(sys.executable), "data")
+    else:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+PASTA_DATA = _caminho_data()
 os.makedirs(PASTA_DATA, exist_ok=True)
+
 NOME_ARQUIVO_NUMERACAO = os.path.join(PASTA_DATA, "Numeração OCI.TXT")
 
-def backup_arquivo_numeracao():
-    """
-    Cria uma cópia de segurança do arquivo de numerações:
-    Numeração OCI_BACKUP_YYYYMMDD_HHMMSS.TXT
-    Salva no mesmo diretório do arquivo original.
-    """
-
-    if not os.path.exists(NOME_ARQUIVO_NUMERACAO):
-        print("Aviso: Arquivo de numeração não encontrado para backup.")
+def backup_arquivo_numeracao(fp_num: str) -> None:
+    if not os.path.exists(fp_num):
         return
 
-    # Geração do nome do backup
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nome_backup = f"Numeração OCI_BACKUP_{timestamp}.TXT"
-
-    # Mesmo diretório do arquivo original
-    pasta = os.path.dirname(NOME_ARQUIVO_NUMERACAO)
-    caminho_backup = os.path.join(pasta, nome_backup)
+    nome_original = os.path.basename(fp_num)
+    nome_base, ext = os.path.splitext(nome_original)
+    nome_backup = f"{nome_base}_BACKUP_{timestamp}{ext}"
+    caminho_backup = os.path.join(os.path.dirname(fp_num), nome_backup)
 
     try:
-        shutil.copyfile(NOME_ARQUIVO_NUMERACAO, caminho_backup)
+        shutil.copyfile(fp_num, caminho_backup)
         print(f"Backup criado: {caminho_backup}")
     except Exception as e:
-        print(f"Erro ao criar backup da numeração: {e}")
+        print(f"Erro ao criar backup: {e}")
 
-# Variável GLOBAL para manter as numerações lidas em memória.
-# Será a lista principal de onde os números serão consumidos.
 NUMERACOES_APAC_MEMORIA: List[str] = []
 
-# --- FUNÇÕES DE PERSISTÊNCIA (LEITURA E ESCRITA) ---
-
-def _ler_numeracoes_disco() -> List[str]:
-    """
-    Função interna para ler o arquivo TXT do disco e retornar a lista de 13 dígitos.
-    (Lógica de leitura mantida).
-    """
-    numeracoes_completas = []
-    
-    if not os.path.exists(NOME_ARQUIVO_NUMERACAO):
+def _ler_numeracoes_disco(fp_num: str) -> List[str]:
+    numeracoes = []
+    if not os.path.exists(fp_num):
         return []
 
     try:
-        # Usamos 'latin1' ou 'cp1252' para arquivos TXT de sistemas brasileiros
-        with open(NOME_ARQUIVO_NUMERACAO, 'r', encoding='latin1') as f:
-            f.readline() # Pula o cabeçalho
-            
+        with open(fp_num, 'r', encoding='latin1') as f:
+            f.readline()
             for linha in f:
                 linha = linha.strip()
                 if not linha:
                     continue
-                
-                # Assume o formato: 352570409959-9. Concatena 12 dígitos + DV.
-                if '-' in linha and len(linha) >= 14: 
-                    num_base = linha.split('-')[0]
-                    dv = linha.split('-')[1]
-                    apac_completa = num_base + dv
-                    numeracoes_completas.append(apac_completa)
-                elif len(linha) >= 13 and linha.isnumeric():
-                     # Caso não tenha hífen, tenta usar os 13 dígitos diretos
-                    numeracoes_completas.append(linha[:13])
-                    
+                if '-' in linha and len(linha) >= 14:
+                    base, dv = linha.split('-', 1)
+                    apac = base + dv[:1]
+                    if len(apac) == 13 and apac.isdigit():
+                        numeracoes.append(apac)
+                elif len(linha) >= 13 and linha.isdigit():
+                    numeracoes.append(linha[:13])
     except Exception as e:
-        print(f"ERRO ao ler o arquivo de numeração: {e}")
-        
-    return numeracoes_completas
+        print(f"ERRO ao ler numerações: {e}")
 
-def salvar_numeracoes():
-    """
-    Salva a lista de numerações da memória (NUMERACOES_APAC_MEMORIA) de volta no arquivo TXT, 
-    reformatando para 12 dígitos + hífen + DV.
-    """
+    return numeracoes
+
+
+def salvar_numeracoes(fp_num: str) -> None:
     global NUMERACOES_APAC_MEMORIA
     try:
-        with open(NOME_ARQUIVO_NUMERACAO, 'w', encoding='latin1') as f:
+        with open(fp_num, 'w', encoding='latin1') as f:
             f.write("NUMERAÇÃO APAC\n")
-            for apac_completa in NUMERACOES_APAC_MEMORIA:
-                if len(apac_completa) == 13:
-                    # Recompõe o formato original (12 dígitos)-(DV)
-                    formato_arquivo = f"{apac_completa[:12]}-{apac_completa[12]}"
-                    f.write(f"{formato_arquivo}\n")
+            for apac in NUMERACOES_APAC_MEMORIA:
+                if len(apac) == 13:
+                    f.write(f"{apac[:12]}-{apac[12]}\n")
                 else:
-                    f.write(f"{apac_completa}\n")
-                    
+                    f.write(f"{apac}\n")
+        print(f"Numerações salvas em: {fp_num}")
     except Exception as e:
-        print(f"ERRO ao salvar o arquivo de numeração: {e}")
+        print(f"ERRO ao salvar numerações: {e}")
 
-# --- FUNÇÕES DE GERENCIAMENTO DE ESTADO (MANAGER) ---
 
-def inicializar_manager():
-    """
-    Função chamada uma vez no início da aplicação para carregar o estado inicial do disco.
-    """
+def inicializar_manager(fp_num: str) -> None:
     global NUMERACOES_APAC_MEMORIA
-    backup_arquivo_numeracao()
-    NUMERACOES_APAC_MEMORIA = _ler_numeracoes_disco()
-    print(f"Gerenciador APAC inicializado. {len(NUMERACOES_APAC_MEMORIA)} numerações carregadas.")
+    backup_arquivo_numeracao(fp_num)
+    NUMERACOES_APAC_MEMORIA = _ler_numeracoes_disco(fp_num)
+    print(f"APAC Manager inicializado → {len(NUMERACOES_APAC_MEMORIA)} numerações disponíveis")
 
 
-def consumir_apac() -> Tuple[str, int]:
-    """
-    Retira e retorna a primeira numeração disponível da memória.
-    
-    Retorna:
-        Tuple[str, int]: (Número da APAC consumida, Total de APACs restantes)
-    """
+def consumir_apac() -> Tuple[str | None, int]:
     global NUMERACOES_APAC_MEMORIA
-    
     if not NUMERACOES_APAC_MEMORIA:
         return None, 0
-        
-    # Retira o primeiro item da lista (consumo)
-    apac_consumida = NUMERACOES_APAC_MEMORIA.pop(0) 
-    
-    return apac_consumida, len(NUMERACOES_APAC_MEMORIA)
+    apac = NUMERACOES_APAC_MEMORIA.pop(0)
+    return apac, len(NUMERACOES_APAC_MEMORIA)
 
-def salvar_relatorio_intervalo_apac(caminho_remessa, primeira_apac, ultima_apac):
-    """
-    Gera um arquivo TXT contendo a primeira e última APAC usadas,
-    salvo no mesmo diretório do arquivo de remessa.
-    
-    Exemplo de saída:
-        PRIMEIRA_APAC=3525704099599
-        ULTIMA_APAC=3525704099621
-    """
+
+def devolver_apac(apac_num: str) -> None:
+    global NUMERACOES_APAC_MEMORIA
+    NUMERACOES_APAC_MEMORIA.insert(0, apac_num)
+
+
+def get_numeracoes_disponiveis(fp_num: str) -> List[str]:
+    return _ler_numeracoes_disco(fp_num)
+
+
+def salvar_relatorio_intervalo_apac(caminho_remessa: str, primeira_apac: str, ultima_apac: str) -> None:
     try:
-        # Diretório onde a remessa foi salva
-        pasta_destino = os.path.dirname(caminho_remessa)
-        
-        # Nome fixo para o arquivo
-        caminho_arquivo = os.path.join(pasta_destino, "intervalo_apac.txt")
-
-        with open(caminho_arquivo, "w", encoding="utf-8") as f:
+        pasta = os.path.dirname(caminho_remessa)
+        arquivo = os.path.join(pasta, "intervalo_apac.txt")
+        with open(arquivo, "w", encoding="utf-8") as f:
             f.write(f"PRIMEIRA_APAC={primeira_apac}\n")
             f.write(f"ULTIMA_APAC={ultima_apac}\n")
-
-        print(f"Arquivo de intervalo gerado em: {caminho_arquivo}")
-    
+        print(f"Intervalo salvo: {arquivo}")
     except Exception as e:
-        print(f"Erro ao gerar arquivo de intervalo: {e}")
-
-def get_numeracoes_disponiveis() -> List[str]:
-    """Expõe a leitura do arquivo para a GUI, sem inicializar o manager."""
-    return _ler_numeracoes_disco()
-
-# No apac_manager.py, adicione:
-
-def devolver_apac(apac_num: str):
-    """Devolve a APAC à lista (uso em caso de erro de processamento)."""
-    global NUMERACOES_APAC_MEMORIA
-    # Usa insert(0) para colocar de volta no início da lista (onde foi consumida)
-    NUMERACOES_APAC_MEMORIA.insert(0, apac_num)
+        print(f"Erro ao salvar intervalo: {e}")

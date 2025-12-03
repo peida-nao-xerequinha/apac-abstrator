@@ -220,12 +220,12 @@ def gerar_blocos_paciente(p, apac_num, medico_ref, cnes_ref, competencia):
     linhas.extend(gerar_bloco_procedimentos(idade, dados["apa_cmp"], apac_num, cnes_terc))
     return linhas
 
-def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
-    FP_MEDICOS = os.path.join(DATA_DIR, "medicos.csv")
-    FP_ESTAB = os.path.join(DATA_DIR, "estabelecimentos.csv")
+def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None, fp_num_apac=None, fp_medicos=None, fp_estab=None):
     
-    # INICIALIZAÇÃO AGORA OCORRE AQUI (Gera backup e carrega NUMERACOES_APAC_MEMORIA)
-    inicializar_manager()
+    FP_MEDICOS = fp_medicos or os.path.join(DATA_DIR, "medicos.csv")
+    FP_ESTAB = fp_estab or os.path.join(DATA_DIR, "estabelecimentos.csv")
+    
+    inicializar_manager(fp_num_apac)
     
     df_p = ler_csv_pacientes(fp_pacientes)
     df_m = pd.read_csv(FP_MEDICOS, delimiter=";") if os.path.exists(FP_MEDICOS) else pd.DataFrame()
@@ -252,7 +252,6 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
         try:
             blocos = gerar_blocos_paciente(paciente.to_dict(), apac_num_tentativa, med_ref, cnes_ref, competencia)
             
-            # SUCESSO: O número consumido é usado
             if primeira is None:
                 primeira = apac_num_tentativa
             ultima = apac_num_tentativa
@@ -263,11 +262,9 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
                 atualizar_status(total)
                 
         except Exception as e:
-            # FALHA: Devolve o número da APAC para o pool
             devolver_apac(apac_num_tentativa)
             
             if atualizar_status:
-                # Envia log de erro para o histórico na GUI
                 QtCore.QMetaObject.invokeMethod(MainWindow.instance(), 'adicionar_historico', QtCore.Qt.QueuedConnection, 
                                                 QtCore.Q_ARG(str, f"⚠️ ERRO ({apac_num_tentativa}): Falha no paciente '{paciente_nome}': {str(e).splitlines()[0]}"))
             
@@ -280,8 +277,7 @@ def processar_remessa(fp_pacientes, competencia, versao, atualizar_status=None):
         for l in linhas:
             f.write(remover_acentos_para_ascii(l).encode("ascii"))
             
-    # Salva o estado FINAL das numerações (excluindo as usadas)
-    salvar_numeracoes()
+    salvar_numeracoes(fp_num_apac)
     salvar_relatorio_intervalo_apac(OUTPUT_FILE, primeira, ultima)
     
     return OUTPUT_FILE, total, primeira, ultima
@@ -292,17 +288,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Lê direto do arquivo SEM INICIALIZAR o manager
-        num_oci = len(get_numeracoes_disponiveis()) 
+        self.FP_NUMERACAO = os.path.join(DATA_DIR, "Numeração OCI.TXT")
+        self.FP_MEDICOS = os.path.join(DATA_DIR, "medicos.csv")
+        self.FP_ESTAB = os.path.join(DATA_DIR, "estabelecimentos.csv")
+        
+        num_oci = len(get_numeracoes_disponiveis(self.FP_NUMERACAO))
         
         self.setWindowTitle("Gerador de Remessa APAC")
         icon_path = os.path.join(ASSETS_DIR, "mini.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QtGui.QIcon(icon_path))
-        self.resize(800, 440)
+        self.resize(800, 560)
         self.setStyleSheet(f"background-color: {COR_BG}; color: {COR_TEXT}; font-family: {FONT};")
         
-        # Necessário para referenciar a instância da janela no invokeMethod
         MainWindow._instance = self 
         
         central = QtWidgets.QWidget()
@@ -355,6 +353,37 @@ class MainWindow(QtWidgets.QMainWindow):
         lbl_orientacao.setWordWrap(True)
         lbl_orientacao.setStyleSheet(f"color:#ffeb3b; font-size:8pt; padding:4px;")
         left_layout.addWidget(lbl_orientacao)
+        
+        lbl_data_files = QtWidgets.QLabel("Caminhos dos Arquivos de Dados")
+        lbl_data_files.setStyleSheet(f"color:{COR_ACCENT}; font-weight:600; margin-top:8px;")
+        left_layout.addWidget(lbl_data_files)
+        
+        lbl_num = QtWidgets.QLabel("Numeração APAC (TXT)")
+        lbl_num.setStyleSheet(f"color:{COR_TEXT}; font-size:9pt; margin-top:4px;")
+        left_layout.addWidget(lbl_num)
+        self.entry_numeracao = QtWidgets.QLineEdit()
+        self.entry_numeracao.setText(self.FP_NUMERACAO)
+        self.entry_numeracao.setStyleSheet("background:#0b0b0b; color: #e6eef6; padding:4px; font-size:9pt;")
+        left_layout.addWidget(self.entry_numeracao)
+        
+        lbl_med = QtWidgets.QLabel("Médicos (CSV)")
+        lbl_med.setStyleSheet(f"color:{COR_TEXT}; font-size:9pt; margin-top:4px;")
+        left_layout.addWidget(lbl_med)
+        self.entry_medicos = QtWidgets.QLineEdit()
+        self.entry_medicos.setText(self.FP_MEDICOS)
+        self.entry_medicos.setStyleSheet("background:#0b0b0b; color: #e6eef6; padding:4px; font-size:9pt;")
+        left_layout.addWidget(self.entry_medicos)
+        
+        lbl_est = QtWidgets.QLabel("Estabelecimentos (CSV)")
+        lbl_est.setStyleSheet(f"color:{COR_TEXT}; font-size:9pt; margin-top:4px;")
+        left_layout.addWidget(lbl_est)
+        self.entry_estab = QtWidgets.QLineEdit()
+        self.entry_estab.setText(self.FP_ESTAB)
+        self.entry_estab.setStyleSheet("background:#0b0b0b; color: #e6eef6; padding:4px; font-size:9pt;")
+        left_layout.addWidget(self.entry_estab)
+        
+        self.entry_numeracao.textChanged.connect(self.atualizar_contagem_apac)
+        
         self.lbl_numeracoes = QtWidgets.QLabel(
         f"Numerações APAC disponíveis: {num_oci}"
         )
@@ -453,13 +482,36 @@ class MainWindow(QtWidgets.QMainWindow):
         fp, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Selecione o CSV de Pacientes", start_dir, "CSV Files (*.csv)")
         if fp:
             self.entry_csv.setText(fp)
+            
+    def atualizar_contagem_apac(self):
+        fp_num = self.entry_numeracao.text().strip()
+        num_oci = 0
+        try:
+            num_oci = len(get_numeracoes_disponiveis(fp_num))
+        except Exception:
+            pass
+        self.lbl_numeracoes.setText(f"Numerações APAC disponíveis: {num_oci}")
+
 
     def validar_campos(self):
         fp = self.entry_csv.text().strip()
         comp = self.entry_comp.text().strip()
         vers = self.entry_vers.text().strip()
+        fp_num = self.entry_numeracao.text().strip()
+        fp_med = self.entry_medicos.text().strip()
+        fp_est = self.entry_estab.text().strip()
+        
         if not fp or not os.path.isfile(fp):
-            QtWidgets.QMessageBox.critical(self, "Erro", "Selecione um CSV válido.")
+            QtWidgets.QMessageBox.critical(self, "Erro", "Selecione um CSV de Pacientes válido.")
+            return False
+        if not fp_num or not os.path.isfile(fp_num):
+            QtWidgets.QMessageBox.critical(self, "Erro", "Caminho do arquivo de Numeração APAC inválido.")
+            return False
+        if not fp_med or not os.path.isfile(fp_med):
+            QtWidgets.QMessageBox.critical(self, "Erro", "Caminho do arquivo de Médicos inválido.")
+            return False
+        if not fp_est or not os.path.isfile(fp_est):
+            QtWidgets.QMessageBox.critical(self, "Erro", "Caminho do arquivo de Estabelecimentos inválido.")
             return False
         if not (len(comp) == 6 and comp.isdigit()):
             QtWidgets.QMessageBox.critical(self, "Erro", "Competência inválida (AAAAMM).")
@@ -467,6 +519,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not (len(vers) == 5 and vers[2] == "." and vers.replace(".", "").isdigit()):
             QtWidgets.QMessageBox.critical(self, "Erro", "Versão inválida (NN.NN).")
             return False
+            
         return True
 
     def update_clock(self):
@@ -476,23 +529,34 @@ class MainWindow(QtWidgets.QMainWindow):
     def iniciar_processamento(self):
         if not self.validar_campos():
             return
-        fp = self.entry_csv.text().strip()
+            
+        fp_pacientes = self.entry_csv.text().strip()
         comp = self.entry_comp.text().strip()
         vers = self.entry_vers.text().strip()
+        fp_num = self.entry_numeracao.text().strip()
+        fp_med = self.entry_medicos.text().strip()
+        fp_est = self.entry_estab.text().strip()
+        
         self.historico_signal.emit(f"Iniciando processamento para Comp. {comp}...")
+        self.historico_signal.emit(f"Numeração lida de: {os.path.basename(fp_num)}")
+        
         try:
-            df = ler_csv_pacientes(fp)
+            df = ler_csv_pacientes(fp_pacientes)
             total = len(df.index)
             self.historico_signal.emit(f"CSV lido: {total} registros encontrados.")
         except Exception as e:
             self.historico_signal.emit(f"ERRO ao ler CSV: {e}")
             total = 1
+            
         self.progress.setValue(0)
         self.status_label.setText("Status: iniciando...")
         self.btn_gerar.setEnabled(False)
-        threading.Thread(target=self._worker, args=(fp, comp, vers, total), daemon=True).start()
+        
+        threading.Thread(target=self._worker, 
+                         args=(fp_pacientes, comp, vers, total, fp_num, fp_med, fp_est), 
+                         daemon=True).start()
 
-    def _worker(self, fp, comp, vers, total):
+    def _worker(self, fp_pacientes, comp, vers, total, fp_num, fp_med, fp_est):
         def atualizar_status(n):
             try:
                 pct = int((n / max(1, total)) * 100)
@@ -501,9 +565,10 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 QtCore.QMetaObject.invokeMethod(self.status_label, "setText", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, f"Status: geradas {n}"))
         try:
-            arq, total_geradas, primeira, ultima = processar_remessa(fp, comp, vers, atualizar_status=atualizar_status)
-            
-            # --- MODIFICADO: Remove a lógica de contagem e passagem de argumento ---
+            arq, total_geradas, primeira, ultima = processar_remessa(
+                fp_pacientes, comp, vers, atualizar_status=atualizar_status,
+                fp_num_apac=fp_num, fp_medicos=fp_med, fp_estab=fp_est
+            )
             
             QtCore.QMetaObject.invokeMethod(self, "_on_finished", QtCore.Qt.QueuedConnection,
                                             QtCore.Q_ARG(str, arq), QtCore.Q_ARG(int, total_geradas),
@@ -512,14 +577,13 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtCore.QMetaObject.invokeMethod(self, "_on_error", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, str(e)))
 
-    # --- MODIFICADO: Retorna à assinatura original (sem final_num_oci) ---
     @QtCore.Slot(str, int, str, str)
     def _on_finished(self, arq, total_geradas, primeira, ultima): 
         self.progress.setValue(100)
         self.status_label.setText(f"Concluído: {total_geradas} APACs ({primeira} → {ultima})")
         self.historico_signal.emit(f"✅ SUCESSO! Arq.: {arq}, {total_geradas} APACs.")
         
-        # --- REMOVIDO: Atualização de self.lbl_numeracoes ---
+        self.atualizar_contagem_apac()
         
         QtWidgets.QMessageBox.information(self, "Sucesso", f"Arquivo gerado: {arq}\nTotal APACs: {total_geradas}\n{primeira} → {ultima}")
         self.btn_gerar.setEnabled(True)
@@ -530,8 +594,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label.setText("Status: Erro!")
         self.historico_signal.emit(f"❌ ERRO: {msg.splitlines()[0]}")
         
-        # --- REMOVIDO: Atualização de self.lbl_numeracoes ---
-
+        self.atualizar_contagem_apac()
+        
         QtWidgets.QMessageBox.critical(self, "Erro", msg)
         self.btn_gerar.setEnabled(True)
 

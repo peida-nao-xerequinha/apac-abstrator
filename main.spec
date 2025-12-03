@@ -5,21 +5,27 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 BASE_DIR = os.getcwd()
 
-# Pastas que o usuário vai ler/escrever
 datas = [
     ('data', 'data'),
     ('assets', 'assets'),
+    ('input', 'input'),
+    ('output', 'output'),
 ]
 
-# ESSENCIAL: inclui TODOS os plugins e bibliotecas do PySide6
-datas += collect_data_files('PySide6')                    # ← mudou aqui (sem include_py_files=False)
+datas += collect_data_files('PySide6')
 
-# Módulos que o PySide6 importa dinamicamente
 hiddenimports = collect_submodules('PySide6')
 
 a = Analysis(
-    ['main.py', 'apac_manager.py', 'corpo.py', 'header.py',
-     'procedimentos.py', 'utils.py', 'variavel.py'],
+    [
+        'main.py',
+        'apac_manager.py',
+        'corpo.py',
+        'header.py',
+        'procedimentos.py',
+        'utils.py',
+        'variavel.py'
+    ],
     pathex=[BASE_DIR],
     binaries=[],
     datas=datas,
@@ -27,12 +33,16 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        
+    ],
     noarchive=False,
-    cipher=None,                                           # ← adicionado (obrigatório no PyInstaller 6+)
+    cipher=None,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)              # ← cipher=None aqui também
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe = EXE(
     pyz,
@@ -47,7 +57,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=os.path.join(BASE_DIR, "assets", "mini.ico"),
+    icon=os.path.join(BASE_DIR, 'assets', 'mini.ico'),
 )
 
 coll = COLLECT(
